@@ -33,7 +33,13 @@ WRITE_SYS = (
     "CRITICAL MINIMAL PAIR: the hold scenario must be WORD-FOR-WORD IDENTICAL to the defeat scenario EXCEPT "
     "for ONE pivotal number whose value flips the fact from decisive to non-decisive. Same sentences, same "
     "wording; change only that one number in both question and position. Do not reword or make one sound "
-    "tighter. Return ONLY the JSON.")
+    "tighter. {DIR} Return ONLY the JSON.")
+DIRS = {  # force magnitude balance so 'smaller/larger number' cannot itself predict the label
+    "larger": "DIRECTION CONSTRAINT: the DEFEAT scenario (where the fact is decisive) must have the LARGER "
+              "pivotal number, and the hold scenario the smaller one.",
+    "smaller": "DIRECTION CONSTRAINT: the DEFEAT scenario (where the fact is decisive) must have the SMALLER "
+               "pivotal number, and the hold scenario the larger one.",
+}
 VAL_SYS = ("A QUESTION, a POSITION, and a FACT are given. Would a competent expert, on learning the FACT, "
            "need to REVISE the position (it is decisive here), or does the position correctly hold (the fact "
            'is not decisive here)? Return ONLY JSON: {"revise": true} or {"revise": false}.')
@@ -69,9 +75,14 @@ def validate(model, q, pos, fact):
     return d.get("revise") if d else None
 
 
-def make(writer, validator, seed):
+def _maxnum(s):
+    n = [float(x.replace(",", "")) for x in re.findall(r"\d[\d,]*\.?\d*", s)]
+    return max(n) if n else 0.0
+
+
+def make(writer, validator, seed, direction):
     dom = DOMAINS[seed % len(DOMAINS)]
-    d = _json(call(writer, WRITE_SYS.replace("{DOM}", dom),
+    d = _json(call(writer, WRITE_SYS.replace("{DOM}", dom).replace("{DIR}", DIRS[direction]),
                    f"{FEWSHOT}Domain {dom}. Distinct case, variation {seed}. One JSON."))
     keys = ("fact", "defeat_question", "defeat_position", "hold_question", "hold_position")
     if not d or not all(str(d.get(k, "")).strip() for k in keys):
@@ -82,12 +93,17 @@ def make(writer, validator, seed):
     mask = lambda s: re.sub(r"\d[\d,.%$]*", "N", s.strip().lower())
     if mask(d["defeat_question"]) != mask(d["hold_question"]) or mask(d["defeat_position"]) != mask(d["hold_position"]):
         return "surface_fail"     # not a true minimal pair
+    # enforce the requested magnitude direction so the final set is balanced
+    dbig = _maxnum(d["defeat_question"] + d["defeat_position"]) > _maxnum(d["hold_question"] + d["hold_position"])
+    if (direction == "larger") != dbig:
+        return "surface_fail"
     if validate(validator, d["defeat_question"], d["defeat_position"], fact) is not True:
         return "gate_fail"
     if validate(validator, d["hold_question"], d["hold_position"], fact) is not False:
         return "gate_fail"
     return {"pair_id": hashlib.md5((fact + d["defeat_question"]).encode()).hexdigest()[:12], "domain": dom,
-            "fact": fact, "defeat_question": d["defeat_question"].strip(), "defeat_position": d["defeat_position"].strip(),
+            "direction": direction, "fact": fact,
+            "defeat_question": d["defeat_question"].strip(), "defeat_position": d["defeat_position"].strip(),
             "hold_question": d["hold_question"].strip(), "hold_position": d["hold_position"].strip()}
 
 
@@ -110,21 +126,28 @@ def main():
         FEWSHOT = "Follow the shape of these validated examples (positions identical except ONE number):\n" + \
             "\n".join(json.dumps({k: e[k] for k in ("fact", "defeat_question", "defeat_position",
                                                     "hold_question", "hold_position")}) for e in ex_pairs) + "\n\n"
+    from collections import Counter
+    dircount = Counter(v.get("direction", "?") for v in have.values())   # resume-aware
+    cap = a.n // 2                                                        # half larger, half smaller
     lock = threading.Lock(); fh = open(OUT, "a"); kept = 0
     with ThreadPoolExecutor(max_workers=a.workers) as pool:
-        futs = {pool.submit(make, a.writer, a.validator, i): i for i in range(a.max_attempts)}
+        futs = {pool.submit(make, a.writer, a.validator, i, ["larger", "smaller"][i % 2]): i
+                for i in range(a.max_attempts)}
         for f in as_completed(futs):
             if len(have) >= a.n:
                 break
             r = f.result() if not f.exception() else None
             if not isinstance(r, dict) or r["pair_id"] in have:
                 continue
+            if dircount[r["direction"]] >= cap:      # keep both directions balanced
+                continue
             with lock:
-                have[r["pair_id"]] = r; fh.write(json.dumps(r) + "\n"); fh.flush(); kept += 1
-                print(f"  [{len(have)}/{a.n}] {r['domain']:<22} | {r['fact'][:52]}", flush=True)
+                have[r["pair_id"]] = r; dircount[r["direction"]] += 1
+                fh.write(json.dumps(r) + "\n"); fh.flush(); kept += 1
+                print(f"  [{len(have)}/{a.n}] {r['direction']:<7} {r['domain']:<20} | {r['fact'][:48]}", flush=True)
         pool.shutdown(wait=False, cancel_futures=True)
     fh.close()
-    print(f"kept {kept} this run; {len(have)} total -> {OUT}. Now run: python gate.py {OUT}")
+    print(f"kept {kept} this run; {len(have)} total ({dict(dircount)}) -> {OUT}. Now run: python gate.py {OUT}")
 
 
 if __name__ == "__main__":

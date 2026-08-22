@@ -1,11 +1,11 @@
-# Touchstone — a shortcut-proof reasoning eval
+# Reasoning Assay — a shortcut-proof reasoning eval
 
 Most evals that try to measure "reasoning" can be gamed. The moment you build a test, a model can find
 a surface shortcut — a keyword, a register, a length cue — that passes it without reasoning. Block one
 shortcut and the correlation just moves to the next feature. It's a ladder, and it goes deeper than you'd
 expect (word choice → tone → length → which specific words carry meaning).
 
-**Touchstone removes the ladder entirely** by changing *what the label depends on*. Instead of two
+**Reasoning Assay removes the ladder entirely** by changing *what the label depends on*. Instead of two
 different questions where the wording leaks the answer, each item is **one fact quoted verbatim into two
 near-identical scenarios**:
 
@@ -27,15 +27,17 @@ answer changed position — never the model grading itself.
 
 The eval was stress-tested from both ends before being trusted:
 
-- **Positive control** — a strong reasoner should ace it, and does. `gpt-4o` scores **~93%**.
-- **Negative control** — a surface-shortcut classifier should be helpless on the spurious surface, and
-  is: content, register, and style (everything except the pivotal number) score at **chance**
-  (`gate.py`, leave-pair-out). The pivotal number necessarily differs — it's the variable the model must
-  reason about — so it isn't a spurious feature; `gate.py` reports its magnitude balance as a diagnostic.
+- **Positive control** — a strong reasoner should ace it, and does. `gpt-4o` scores **~91%** on the
+  shipped cases (run via `run_eval.py`), vs weak models at chance.
+- **Negative control** — a surface-shortcut classifier is helpless: content, register, and style all
+  score at **chance** (`gate.py`, leave-pair-out, numbers stripped). And the pivotal number's magnitude
+  is **balanced** (the defeat scenario is the larger number in half the pairs, smaller in the other half —
+  `gate.py` confirms 50/50), so "smaller number → revise" carries no signal either. The only thing that
+  differs is the number's *meaning in context*, which requires reasoning.
 - **Label audit** — an independent model verified the cases are correctly labeled (~99%).
 - **Two adversarial falsification passes** tried to break the design and were answered.
 
-And it produces a clean signal across model sizes and families (identical cases):
+And it produces a clean signal across model sizes and families (same-construction cases):
 
 | model | balanced accuracy |
 |---|---|
@@ -43,14 +45,15 @@ And it produces a clean signal across model sizes and families (identical cases)
 | 3B | ~56% (still ~chance — defaults to holding) |
 | 7B | **~94%** |
 | 72B | **~97%** |
-| gpt-4o | **~93%** |
+| gpt-4o | **~91%** |
 
 Reasoning-under-pressure emerges as a **cliff between 3B and 7B** — a stock 7B basically solves it with no
 training, everything below sits at chance. The ~40-point gap between strong and weak models on the *same
-cases* is the eval doing its job: measuring reasoning, not surface.
+cases* is the eval doing its job: measuring reasoning, not surface. (The sweep across sizes was run on
+same-construction cases; the positive control is reconfirmed on the exact shipped set at ~91%.)
 
 > Honest scope: no eval is provably "unfoolable." The defensible claim is that strong reasoners score
-> ~93%, while weak models *and* surface-shortcut classifiers both score at chance — so the number
+> ~90%+, while weak models *and* surface-shortcut classifiers both score at chance — so the number
 > reflects reasoning, not wording. Try to break it; that's what `gate.py` is for.
 
 ## Usage
@@ -77,10 +80,7 @@ again from the writer/validator used to make the cases.
 ## Limitations
 
 - No eval is provably unfoolable; this one is *validated*, not proven perfect. The defensible claim is
-  strong reasoners ~93%, weak models and surface classifiers at chance.
-- The pivotal number's magnitude currently leans one direction across the case set (`gate.py` reports it).
-  It isn't a spurious feature and no tested model exploits it — weak models score at chance, below what
-  magnitude alone would give — but balancing it across generated cases is a worthwhile refinement.
+  strong reasoners ~90%+, weak models and surface classifiers at chance.
 - The scale table mixes model families at some points (3B is Llama, 7B+ Qwen). The gap is far too large
   to be a family effect, but a same-family sweep would pin the cliff more precisely.
 
