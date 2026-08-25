@@ -25,7 +25,10 @@ DOMAINS = ["industrial engineering", "clinical trial design", "maritime logistic
 WRITE_SYS = (
     "Design a COUNTERFACTUAL reasoning test. Return strict JSON with keys: fact, defeat_question, "
     "defeat_position, hold_question, hold_position.\n"
-    "- fact: ONE specific consideration CONTAINING NUMBERS, in the domain '{DOM}', phrased self-containedly.\n"
+    "- fact: ONE specific consideration CONTAINING NUMBERS, in the domain '{DOM}', phrased self-containedly. "
+    "Invent a DISTINCT, non-obvious fact -- avoid the single most canonical textbook constant for the domain; "
+    "vary the entity, quantity, and framing so it is not the same fact every time. The fact's own number must "
+    "NOT appear anywhere in either scenario.\n"
     "- defeat_question + defeat_position: a scenario (question, then the reasonable initial position) where "
     "THIS EXACT FACT is decisive and an expert should REVISE once they know it.\n"
     "- hold_question + hold_position: a scenario where the SAME EXACT FACT does NOT change the answer, so "
@@ -75,8 +78,12 @@ def validate(model, q, pos, fact):
     return d.get("revise") if d else None
 
 
+def _nums(s):
+    return [float(x.replace(",", "")) for x in re.findall(r"\d[\d,]*\.?\d*", s)]
+
+
 def _maxnum(s):
-    n = [float(x.replace(",", "")) for x in re.findall(r"\d[\d,]*\.?\d*", s)]
+    n = _nums(s)
     return max(n) if n else 0.0
 
 
@@ -97,6 +104,18 @@ def make(writer, validator, seed, direction):
     dbig = _maxnum(d["defeat_question"] + d["defeat_position"]) > _maxnum(d["hold_question"] + d["hold_position"])
     if (direction == "larger") != dbig:
         return "surface_fail"
+    # leak guard: the fact's DECISIVE bound (the fact number compared against the pivotal threshold) must
+    # NOT be pre-stated in the scenario -- else the model is handed the missing consideration and never has
+    # to bring it. (Descriptive numbers shared between fact and scenario, e.g. "100-acre farm", are fine.)
+    dn = _nums(d["defeat_question"] + " " + d["defeat_position"])
+    hn = _nums(d["hold_question"] + " " + d["hold_position"])
+    fn = _nums(fact)
+    if len(dn) == len(hn) and fn:
+        diffs = [a for a, b in zip(dn, hn) if a != b]
+        if len(diffs) == 1:
+            bound = min(fn, key=lambda x: abs(x - diffs[0]))
+            if bound in dn or bound in hn:
+                return "leak_fail"
     if validate(validator, d["defeat_question"], d["defeat_position"], fact) is not True:
         return "gate_fail"
     if validate(validator, d["hold_question"], d["hold_position"], fact) is not False:
@@ -115,7 +134,9 @@ def main():
     ap.add_argument("--validator", default="deepseek/deepseek-chat")
     ap.add_argument("--workers", type=int, default=5)
     ap.add_argument("--max_attempts", type=int, default=600)
+    ap.add_argument("--fact_cap", type=int, default=2, help="max cases sharing one number-masked fact shape")
     a = ap.parse_args()
+    maskf = lambda f: re.sub(r"\d[\d,.%$]*", "N", f.strip().lower())
     have = {}
     if os.path.exists(OUT):
         for l in open(OUT):
@@ -128,6 +149,7 @@ def main():
                                                     "hold_question", "hold_position")}) for e in ex_pairs) + "\n\n"
     from collections import Counter
     dircount = Counter(v.get("direction", "?") for v in have.values())   # resume-aware
+    factcount = Counter(maskf(v["fact"]) for v in have.values())         # resume-aware template cap
     cap = a.n // 2                                                        # half larger, half smaller
     lock = threading.Lock(); fh = open(OUT, "a"); kept = 0
     with ThreadPoolExecutor(max_workers=a.workers) as pool:
@@ -141,8 +163,10 @@ def main():
                 continue
             if dircount[r["direction"]] >= cap:      # keep both directions balanced
                 continue
+            if factcount[maskf(r["fact"])] >= a.fact_cap:   # cap templated fact shapes
+                continue
             with lock:
-                have[r["pair_id"]] = r; dircount[r["direction"]] += 1
+                have[r["pair_id"]] = r; dircount[r["direction"]] += 1; factcount[maskf(r["fact"])] += 1
                 fh.write(json.dumps(r) + "\n"); fh.flush(); kept += 1
                 print(f"  [{len(have)}/{a.n}] {r['direction']:<7} {r['domain']:<20} | {r['fact'][:48]}", flush=True)
         pool.shutdown(wait=False, cancel_futures=True)

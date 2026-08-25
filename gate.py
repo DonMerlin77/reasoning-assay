@@ -80,6 +80,17 @@ def run(path):
         if acc >= KILL:
             fails.append(label)
 
+    # PROBE SELF-TEST (positive control on the control -- anti-tautology). Relabel the SAME features by a
+    # pure magnitude rule (pivotal vs fact bound) and confirm the SAME probe catches it. If this is ~chance
+    # the probe is blind to numeric shortcuts, so the "no shortcut" result above would be meaningless.
+    ylab = np.array([1 if f[0] > f[1] else 0 for f in feats])
+    acc_pc = cross_val_score(LogisticRegression(max_iter=3000), Xn, ylab, cv=GroupKFold(5), groups=fid).mean()
+    pc_ok = acc_pc >= 0.75
+    print(f"PROBE SELF-TEST (plant magnitude shortcut, MUST be caught): {100*acc_pc:5.1f}%"
+          f"{'  OK' if pc_ok else '  <-- PROBE BLIND: negative control is tautological'}")
+    if not pc_ok:
+        fails.append("probe_blind")
+
     # diagnostics (positional pivotal, not max number)
     dbig = sum(1 for r in rows for dp, hp in [_pivotal(r)] if dp is not None and dp > hp)
     resolved = sum(1 for r in rows if _pivotal(r)[0] is not None)
