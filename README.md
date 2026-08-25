@@ -1,4 +1,13 @@
-# Reasoning Assay — a shortcut-proof reasoning eval
+# Reasoning Assay — a shortcut-resistant test for single-constraint revision
+
+**Scope (read first):** this measures one specific thing — **single-constraint revision under pushback**:
+given a stated position and one new fact, does a model correctly *revise* when the fact defeats the
+position and *hold* when it doesn't. Each case is a single threshold comparison (budget vs cost, load vs
+capacity). It is **not** a general or multi-step reasoning benchmark. A correct hand-written solver that
+does the comparison also scores ~91% (tying gpt-4o), which is the point: this measures reliable execution
+of *one* in-context comparison, not depth. The 3B→7B cliff below is for *this* task and shouldn't be read
+as generalizing to reasoning broadly. (Thanks to a reviewer who stress-tested the first version and
+pinned this scope — exactly what the eval is for.)
 
 Most evals that try to measure "reasoning" can be gamed. The moment you build a test, a model can find
 a surface shortcut — a keyword, a register, a length cue — that passes it without reasoning. Block one
@@ -29,11 +38,13 @@ The eval was stress-tested from both ends before being trusted:
 
 - **Positive control** — a strong reasoner should ace it, and does. `gpt-4o` scores **~91%** on the
   shipped cases (run via `run_eval.py`), vs weak models at chance.
-- **Negative control** — a surface-shortcut classifier is helpless: content, register, and style all
-  score at **chance** (`gate.py`, leave-pair-out, numbers stripped). And the pivotal number's magnitude
-  is **balanced** (the defeat scenario is the larger number in half the pairs, smaller in the other half —
-  `gate.py` confirms 50/50), so "smaller number → revise" carries no signal either. The only thing that
-  differs is the number's *meaning in context*, which requires reasoning.
+- **Negative control** — no *learned* shortcut works. The text probes (content/register/style, numbers
+  stripped) are at chance, but note those are guaranteed clean by construction (the generator enforces
+  number-mask-identity), so they're a lint, not proof. The real check is the **numbers-aware probe** in
+  `gate.py`: a classifier given the pivotal number + fact bound + fact keywords, leave-pair-out *and*
+  leave-fact-out — it comes back at **chance**, because the magnitude direction is balanced (45/45) so no
+  learnable numeric rule separates the classes. What *does* score high is a hand-written solver that
+  actually does the comparison — that's the task's depth (see Scope), not a leak.
 - **Label audit** — an independent model verified the cases are correctly labeled (~99%).
 - **Two adversarial falsification passes** tried to break the design and were answered.
 
